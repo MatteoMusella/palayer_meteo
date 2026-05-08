@@ -40,6 +40,7 @@ except Exception:
 #   cloud_cover_h003.grib
 #   pressure_h003.grib
 #   wave_height_h003.grib
+#   lsm.grib
 # ============================================================
 
 
@@ -109,6 +110,9 @@ CREATE_GZIP = True
 # Se True, prova a continuare anche se mancano raffiche o onde
 ALLOW_OPTIONAL_MISSING = True
 
+# Raggio (in celle) usato per riempire NaN sul mare usando LSM
+COASTAL_FILL_RADIUS = 4
+
 
 # ============================================================
 # FILE ALIAS
@@ -150,6 +154,10 @@ FILE_ALIASES = {
         "wave_height_h{step:03d}.grib",
         "swh_h{step:03d}.grib",
     ],
+    "lsm": [
+        "lsm.grib",
+        "lsm_h{step:03d}.grib",
+    ],
 }
 
 
@@ -169,6 +177,7 @@ SUMMARY = {
     "files_created": [],
     "upsample_factor": UPSAMPLE_FACTOR,
     "has_scipy_interp": HAS_SCIPY_INTERP,
+    "coastal_fill_radius": COASTAL_FILL_RADIUS,
 }
 
 
@@ -410,6 +419,78 @@ def read_field(varname, step, required=True):
     }
 
 
+def load_land_sea_mask():
+    fp = find_file("lsm", 0)
+    if fp is None:
+        add_optional_missing("lsm", "LSM non trovato: skipping coastal fill")
+        return None
+
+    lats, lons, data = open_grib(fp)
+    lats, lons, data = crop_bbox(lats, lons, data)
+    lats, lons, data = interpolate_grid(lats, lons, data, UPSAMPLE_FACTOR)
+
+    data = np.asarray(data, dtype=float)
+    data = np.clip(data, 0, 1)
+
+    return {
+        "file": fp.name,
+        "lats": lats,
+        "lons": lons,
+        "data": data,
+    }
+
+
+def map_lsm_to_target(lsm, target_lats, target_lons):
+    if lsm is None:
+        return None
+
+    if len(lsm["lats"]) == len(target_lats) and len(lsm["lons"]) == len(target_lons):
+        return lsm["data"]
+
+    interpolator = RegularGridInterpolator(
+        (lsm["lats"], lsm["lons"]),
+        lsm["data"],
+        method="nearest",
+        bounds_error=False,
+        fill_value=np.nan,
+    )
+
+    lon2d, lat2d = np.meshgrid(target_lons, target_lats)
+    pts = np.column_stack([lat2d.ravel(), lon2d.ravel()])
+    out = interpolator(pts).reshape(len(target_lats), len(target_lons))
+
+    return np.asarray(out, dtype=float)
+
+
+def fill_nan_with_nearest_sea(data, lsm_mask, radius=COASTAL_FILL_RADIUS):
+    if lsm_mask is None:
+        return data
+
+    arr = np.asarray(data, dtype=float)
+    filled = arr.copy()
+    sea_mask = lsm_mask <= 0.5
+
+    if not np.isnan(arr).any():
+        return filled
+
+    nan_positions = np.argwhere(~np.isfinite(arr) & sea_mask)
+
+    for (y, x) in nan_positions:
+        r0 = max(0, y - radius)
+        r1 = min(arr.shape[0], y + radius + 1)
+        c0 = max(0, x - radius)
+        c1 = min(arr.shape[1], x + radius + 1)
+
+        window = arr[r0:r1, c0:c1]
+        window_sea = sea_mask[r0:r1, c0:c1]
+        valid = window[np.isfinite(window) & window_sea]
+
+        if valid.size:
+            filled[y, x] = float(valid[0])
+
+    return filled
+
+
 def round_nested(arr, decimals):
     """
     Converte array numpy in liste JSON-safe.
@@ -546,7 +627,7 @@ def flatten_grid_for_js(data):
 # STEP DATA
 # ============================================================
 
-def process_step(step):
+def process_step(step, lsm_mask=None):
     log(f"Elaboro step H+{step:03d} - upsample {UPSAMPLE_FACTOR}x")
 
     # obbligatori
@@ -603,6 +684,17 @@ def process_step(step):
         wave_cm = np.maximum(wave_height["data"] * 100.0, 0)
     else:
         wave_cm = None
+
+    if lsm_mask is not None:
+        wind_kmh = fill_nan_with_nearest_sea(wind_kmh, lsm_mask)
+        wind_dir_deg = fill_nan_with_nearest_sea(wind_dir_deg, lsm_mask)
+        gust_kmh = fill_nan_with_nearest_sea(gust_kmh, lsm_mask)
+        temperature_c = fill_nan_with_nearest_sea(temperature_c, lsm_mask)
+        precipitation_mm_raw = fill_nan_with_nearest_sea(precipitation_mm_raw, lsm_mask)
+        cloud_pct = fill_nan_with_nearest_sea(cloud_pct, lsm_mask)
+        pressure_hpa = fill_nan_with_nearest_sea(pressure_hpa, lsm_mask)
+        if wave_cm is not None:
+            wave_cm = fill_nan_with_nearest_sea(wave_cm, lsm_mask)
 
     step_data = {
         "step": int(step),
@@ -932,17 +1024,23 @@ def main():
     log(f"Run: {run_meta.get('run_date')} {int(run_meta.get('run_hour_utc', 0)):02d} UTC")
     log(f"Step trovati: {steps}")
 
+    land_sea_mask = load_land_sea_mask()
     all_steps_data = []
     base_lats = None
     base_lons = None
+    mapped_lsm = None
 
     try:
         for step in steps:
-            lats, lons, step_data = process_step(step)
+            lats, lons, step_data = process_step(step, lsm_mask=mapped_lsm)
 
             if base_lats is None:
                 base_lats = lats
                 base_lons = lons
+                mapped_lsm = map_lsm_to_target(land_sea_mask, base_lats, base_lons)
+                if mapped_lsm is not None:
+                    step_data = None
+                    lats, lons, step_data = process_step(step, lsm_mask=mapped_lsm)
             else:
                 if len(base_lats) != len(lats) or len(base_lons) != len(lons):
                     raise RuntimeError(f"Griglia diversa allo step H+{step:03d}")

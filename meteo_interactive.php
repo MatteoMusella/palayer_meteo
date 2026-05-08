@@ -685,64 +685,99 @@ function directionText(deg) {
     return `${fmt(deg, 0)}° ${windDirectionCardinal(deg)}`;
 }
 
-function colorWind(v) {
-    const t = clamp(v / 100, 0, 1);
+function colorRamp(stops, value) {
+    if (value === null || value === undefined || Number.isNaN(value)) return [0, 0, 0, 0];
+    if (value <= stops[0].v) return stops[0].c.slice();
+    if (value >= stops[stops.length - 1].v) return stops[stops.length - 1].c.slice();
 
-    if (t < 0.15) return `rgba(40,120,255,0.62)`;
-    if (t < 0.35) return `rgba(0,190,255,0.72)`;
-    if (t < 0.55) return `rgba(70,220,150,0.80)`;
-    if (t < 0.72) return `rgba(230,220,70,0.88)`;
-    if (t < 0.88) return `rgba(255,145,45,0.94)`;
-    return `rgba(255,70,70,1)`;
+    for (let i = 0; i < stops.length - 1; i++) {
+        const a = stops[i];
+        const b = stops[i + 1];
+        if (value >= a.v && value <= b.v) {
+            const t = (value - a.v) / (b.v - a.v);
+            return [
+                lerp(a.c[0], b.c[0], t),
+                lerp(a.c[1], b.c[1], t),
+                lerp(a.c[2], b.c[2], t),
+                lerp(a.c[3], b.c[3], t)
+            ];
+        }
+    }
+    return stops[stops.length - 1].c.slice();
 }
 
-function colorGust(v) {
-    const t = clamp(v / 130, 0, 1);
-
-    if (t < 0.25) return `rgba(255,120,40,0.68)`;
-    if (t < 0.50) return `rgba(255,70,70,0.82)`;
-    if (t < 0.75) return `rgba(255,30,140,0.92)`;
-    return `rgba(210,50,255,1)`;
+function toCss(c) {
+    return `rgba(${c[0]},${c[1]},${c[2]},${c[3]})`;
 }
 
-function colorTemp(v) {
-    if (v < 0) return "rgba(35,80,210,0.34)";
-    if (v < 8) return "rgba(30,160,220,0.38)";
-    if (v < 15) return "rgba(80,190,120,0.42)";
-    if (v < 22) return "rgba(230,205,35,0.48)";
-    if (v < 30) return "rgba(245,150,25,0.56)";
-    return "rgba(220,50,45,0.64)";
-}
+const WIND_RAMP = [
+    { v: 0, c: [35, 90, 255, 0.20] },
+    { v: 5, c: [40, 150, 255, 0.35] },
+    { v: 15, c: [60, 210, 200, 0.50] },
+    { v: 30, c: [130, 230, 120, 0.60] },
+    { v: 50, c: [230, 215, 70, 0.70] },
+    { v: 70, c: [255, 150, 60, 0.82] },
+    { v: 90, c: [255, 80, 70, 0.92] },
+    { v: 120, c: [210, 60, 160, 1.00] }
+];
 
-function colorRain(v) {
-    if (v === null || v < 0.1) return "rgba(0,0,0,0)";
-    if (v < 1) return "rgba(120,230,255,0.22)";
-    if (v < 4) return "rgba(35,170,255,0.36)";
-    if (v < 10) return "rgba(0,80,230,0.50)";
-    if (v < 20) return "rgba(120,40,180,0.64)";
-    return "rgba(220,30,90,0.76)";
-}
+const GUST_RAMP = [
+    { v: 0, c: [255, 180, 60, 0.25] },
+    { v: 20, c: [255, 120, 60, 0.50] },
+    { v: 40, c: [255, 80, 80, 0.70] },
+    { v: 70, c: [255, 40, 140, 0.85] },
+    { v: 110, c: [215, 60, 255, 1.00] }
+];
 
-function colorCloud(v) {
-    const a = clamp((v || 0) / 100 * 0.58, 0, 0.58);
-    return `rgba(235,235,235,${a})`;
-}
+const TEMP_RAMP = [
+    { v: -10, c: [50, 90, 220, 0.45] },
+    { v: 0, c: [40, 140, 230, 0.50] },
+    { v: 10, c: [60, 200, 200, 0.55] },
+    { v: 20, c: [200, 220, 120, 0.60] },
+    { v: 30, c: [245, 160, 60, 0.68] },
+    { v: 40, c: [220, 70, 60, 0.80] }
+];
 
-function colorPressure(v) {
-    if (v < 1000) return "rgba(25,95,220,0.42)";
-    if (v < 1008) return "rgba(80,170,240,0.36)";
-    if (v < 1015) return "rgba(250,245,190,0.28)";
-    if (v < 1022) return "rgba(245,160,70,0.38)";
-    return "rgba(220,55,45,0.48)";
-}
+const RAIN_RAMP = [
+    { v: 0.1, c: [120, 230, 255, 0.25] },
+    { v: 1, c: [60, 190, 255, 0.35] },
+    { v: 4, c: [30, 140, 255, 0.50] },
+    { v: 10, c: [0, 80, 230, 0.70] },
+    { v: 20, c: [120, 40, 180, 0.80] },
+    { v: 35, c: [220, 30, 90, 0.92] }
+];
 
-function colorWave(v) {
-    if (v === null || v < 2) return "rgba(0,0,0,0)";
-    if (v < 30) return "rgba(35,170,210,0.26)";
-    if (v < 70) return "rgba(0,145,190,0.38)";
-    if (v < 130) return "rgba(0,105,175,0.52)";
-    return "rgba(210,245,255,0.68)";
-}
+const CLOUD_RAMP = [
+    { v: 0, c: [235, 235, 235, 0.0] },
+    { v: 25, c: [235, 235, 235, 0.12] },
+    { v: 50, c: [235, 235, 235, 0.25] },
+    { v: 75, c: [235, 235, 235, 0.40] },
+    { v: 100, c: [235, 235, 235, 0.58] }
+];
+
+const PRESS_RAMP = [
+    { v: 990, c: [30, 100, 220, 0.45] },
+    { v: 1000, c: [70, 160, 240, 0.40] },
+    { v: 1010, c: [210, 230, 190, 0.35] },
+    { v: 1020, c: [245, 160, 70, 0.40] },
+    { v: 1030, c: [220, 70, 60, 0.55] }
+];
+
+const WAVE_RAMP = [
+    { v: 0, c: [0, 0, 0, 0.0] },
+    { v: 20, c: [60, 170, 210, 0.25] },
+    { v: 50, c: [0, 145, 190, 0.40] },
+    { v: 90, c: [0, 105, 175, 0.55] },
+    { v: 140, c: [210, 245, 255, 0.70] }
+];
+
+function colorWind(v) { return colorRamp(WIND_RAMP, v); }
+function colorGust(v) { return colorRamp(GUST_RAMP, v); }
+function colorTemp(v) { return colorRamp(TEMP_RAMP, v); }
+function colorRain(v) { return v === null || v < 0.1 ? [0, 0, 0, 0] : colorRamp(RAIN_RAMP, v); }
+function colorCloud(v) { return colorRamp(CLOUD_RAMP, v || 0); }
+function colorPressure(v) { return colorRamp(PRESS_RAMP, v); }
+function colorWave(v) { return colorRamp(WAVE_RAMP, v); }
 
 function resizeCanvas() {
     const rect = canvas.parentElement.getBoundingClientRect();
@@ -805,12 +840,12 @@ function resetParticles() {
     cloudParticles = [];
     waveParticles = [];
 
-    for (let i = 0; i < 1200; i++) particles.push(makeParticle());
-    for (let i = 0; i < 500; i++) gustParticles.push(makeParticle());
+    for (let i = 0; i < 1700; i++) particles.push(makeParticle());
+    for (let i = 0; i < 720; i++) gustParticles.push(makeParticle());
 
-    for (let i = 0; i < 480; i++) rainParticles.push(makeParticle());
-    for (let i = 0; i < 380; i++) cloudParticles.push(makeParticle());
-    for (let i = 0; i < 420; i++) waveParticles.push(makeParticle());
+    for (let i = 0; i < 700; i++) rainParticles.push(makeParticle());
+    for (let i = 0; i < 520; i++) cloudParticles.push(makeParticle());
+    for (let i = 0; i < 560; i++) waveParticles.push(makeParticle());
 }
 
 function randomLonLat() {
@@ -875,62 +910,65 @@ function stepParticle(p, dt, multiplier = 1) {
     return sp;
 }
 
-function drawScalarField(fieldName, colorFn, options = {}) {
-    const lats = meteo.grid.lats;
-    const lons = meteo.grid.lons;
-
-    const step0 = getStep(currentIndex);
-    const step1 = getNextStep(currentIndex);
-
-    if (!step0 || !step0.grid[fieldName]) return;
-
+function drawScalarFieldSmooth(fieldName, colorFn, options = {}) {
     const alpha = options.alpha ?? 0.45;
-    const stride = options.stride ?? 2;
+    const pixelScale = options.pixelScale ?? 2.0;
 
-    ctx.save();
-    ctx.globalAlpha = alpha;
+    const rect = canvas.parentElement.getBoundingClientRect();
+    const width = Math.max(1, Math.floor(rect.width / pixelScale));
+    const height = Math.max(1, Math.floor(rect.height / pixelScale));
 
-    for (let yi = 0; yi < lats.length - 1; yi += stride) {
-        for (let xi = 0; xi < lons.length - 1; xi += stride) {
-            const lonA = lons[xi];
-            const lonB = lons[Math.min(xi + stride, lons.length - 1)];
-            const latA = lats[yi];
-            const latB = lats[Math.min(yi + stride, lats.length - 1)];
+    if (!drawScalarFieldSmooth.canvas ||
+        drawScalarFieldSmooth.canvas.width !== width ||
+        drawScalarFieldSmooth.canvas.height !== height) {
+        const off = document.createElement("canvas");
+        off.width = width;
+        off.height = height;
+        drawScalarFieldSmooth.canvas = off;
+        drawScalarFieldSmooth.ctx = off.getContext("2d");
+    }
 
-            const lonC = (lonA + lonB) / 2;
-            const latC = (latA + latB) / 2;
+    const off = drawScalarFieldSmooth.canvas;
+    const offCtx = drawScalarFieldSmooth.ctx;
+    const img = offCtx.createImageData(width, height);
+    const data = img.data;
 
-            let v0 = bilinearStep(step0, fieldName, lonC, latC);
-            let v1 = bilinearStep(step1, fieldName, lonC, latC);
+    for (let y = 0; y < height; y++) {
+        const py = y * pixelScale;
+        for (let x = 0; x < width; x++) {
+            const px = x * pixelScale;
+            const coord = map.getCoordinateFromPixel([px, py]);
+            if (!coord) continue;
 
-            if (v0 === null) continue;
-            if (v1 === null) v1 = v0;
+            const lonlat = ol.proj.toLonLat(coord);
+            const val = interpolatedValue(fieldName, lonlat[0], lonlat[1]);
+            if (val === null) continue;
 
-            const val = lerp(v0, v1, fractional);
+            const col = colorFn(val);
+            const a = col[3] * alpha;
+            if (a <= 0) continue;
 
-            const p1 = lonLatToPixel(lonA, latA);
-            const p2 = lonLatToPixel(lonB, latB);
-
-            if (!p1 || !p2) continue;
-
-            ctx.fillStyle = colorFn(val);
-
-            const x = Math.min(p1[0], p2[0]);
-            const y = Math.min(p1[1], p2[1]);
-            const w = Math.abs(p2[0] - p1[0]) + 2;
-            const h = Math.abs(p2[1] - p1[1]) + 2;
-
-            ctx.fillRect(x, y, w, h);
+            const idx = (y * width + x) * 4;
+            data[idx] = col[0];
+            data[idx + 1] = col[1];
+            data[idx + 2] = col[2];
+            data[idx + 3] = Math.round(255 * a);
         }
     }
 
+    offCtx.putImageData(img, 0, 0);
+
+    ctx.save();
+    ctx.imageSmoothingEnabled = true;
+    ctx.globalCompositeOperation = "source-over";
+    ctx.drawImage(off, 0, 0, rect.width, rect.height);
     ctx.restore();
 }
 
 function drawWindLayer() {
-    drawScalarField("wind_kmh", colorWind, {
-        alpha: 0.16,
-        stride: 3
+    drawScalarFieldSmooth("wind_kmh", colorWind, {
+        alpha: 0.32,
+        pixelScale: 1.8
     });
 
     drawWindParticles(false);
@@ -938,9 +976,9 @@ function drawWindLayer() {
 }
 
 function drawGustLayer() {
-    drawScalarField("gust_kmh", colorGust, {
-        alpha: 0.14,
-        stride: 3
+    drawScalarFieldSmooth("gust_kmh", colorGust, {
+        alpha: 0.30,
+        pixelScale: 1.9
     });
 
     drawWindParticles(true);
@@ -970,7 +1008,7 @@ function drawWindParticles(gustMode) {
             const opacity = fade * (gustMode ? 0.90 : 0.68);
 
             ctx.globalAlpha = opacity;
-            ctx.strokeStyle = gustMode ? colorGust(sp) : colorWind(sp);
+            ctx.strokeStyle = gustMode ? toCss(colorGust(sp)) : toCss(colorWind(sp));
             ctx.lineWidth = gustMode
                 ? clamp(1.4 + sp / 45, 1.4, 4.8)
                 : clamp(0.9 + sp / 70, 0.9, 2.8);
@@ -992,7 +1030,7 @@ function drawWindParticles(gustMode) {
                 const len = gustMode ? 5 : 4;
 
                 ctx.globalAlpha = gustMode ? 0.95 : 0.78;
-                ctx.strokeStyle = gustMode ? colorGust(sp) : colorWind(sp);
+                ctx.strokeStyle = gustMode ? toCss(colorGust(sp)) : toCss(colorWind(sp));
                 ctx.lineWidth = gustMode ? 1.8 : 1.2;
 
                 ctx.beginPath();
@@ -1015,27 +1053,27 @@ function drawWindParticles(gustMode) {
 }
 
 function drawTemperature() {
-    drawScalarField("temperature_c", colorTemp, {
-        alpha: 0.55,
-        stride: 2
+    drawScalarFieldSmooth("temperature_c", colorTemp, {
+        alpha: 0.58,
+        pixelScale: 1.7
     });
 
     drawSoftFlow(130, "rgba(255,255,255,0.14)", 0.006);
 }
 
 function drawPressure() {
-    drawScalarField("pressure_hpa", colorPressure, {
-        alpha: 0.55,
-        stride: 2
+    drawScalarFieldSmooth("pressure_hpa", colorPressure, {
+        alpha: 0.52,
+        pixelScale: 1.9
     });
 
     drawSoftFlow(150, "rgba(255,255,255,0.18)", 0.005);
 }
 
 function drawRain() {
-    drawScalarField("precipitation_mm", colorRain, {
-        alpha: 0.72,
-        stride: 2
+    drawScalarFieldSmooth("precipitation_mm", colorRain, {
+        alpha: 0.60,
+        pixelScale: 1.6
     });
 
     ctx.save();
@@ -1070,9 +1108,9 @@ function drawRain() {
 }
 
 function drawClouds() {
-    drawScalarField("cloud_cover_pct", colorCloud, {
-        alpha: 0.72,
-        stride: 2
+    drawScalarFieldSmooth("cloud_cover_pct", colorCloud, {
+        alpha: 0.55,
+        pixelScale: 1.7
     });
 
     ctx.save();
@@ -1108,9 +1146,9 @@ function drawClouds() {
 }
 
 function drawWaves() {
-    drawScalarField("wave_height_cm", colorWave, {
-        alpha: 0.64,
-        stride: 2
+    drawScalarFieldSmooth("wave_height_cm", colorWave, {
+        alpha: 0.60,
+        pixelScale: 1.8
     });
 
     ctx.save();

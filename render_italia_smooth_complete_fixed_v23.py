@@ -123,7 +123,6 @@ FILE_ALIASES = {
     "cloud_cover": ["cloud_cover_h{step:03d}.grib", "tcc_h{step:03d}.grib"],
     "pressure": ["pressure_h{step:03d}.grib", "msl_h{step:03d}.grib", "mslp_h{step:03d}.grib"],
     "wave_height": ["wave_height_h{step:03d}.grib", "swh_h{step:03d}.grib"],
-    "lsm": ["lsm.grib"],
 }
 
 SUMMARY = {
@@ -637,19 +636,7 @@ def load_step_data(step, lsm_mask=None):
     cloud_pct = cloud_to_pct(cloud_cover["data"])
     pressure_hpa = pressure_to_hpa(pressure["data"])
     wave_cm = wave_to_cm(wave_height["data"]) if wave_height is not None else None
-    if lsm_mask is not None:
-        u = fill_nan_with_nearest_sea(u, lsm_mask)
-        v = fill_nan_with_nearest_sea(v, lsm_mask)
-        wind_kmh = fill_nan_with_nearest_sea(wind_kmh, lsm_mask)
-        wind_dir = fill_nan_with_nearest_sea(wind_dir, lsm_mask)
-        gust_kmh = fill_nan_with_nearest_sea(gust_kmh, lsm_mask)
-        temp_c = fill_nan_with_nearest_sea(temp_c, lsm_mask)
-        rain_accum_mm = fill_nan_with_nearest_sea(rain_accum_mm, lsm_mask)
-        cloud_pct = fill_nan_with_nearest_sea(cloud_pct, lsm_mask)
-        pressure_hpa = fill_nan_with_nearest_sea(pressure_hpa, lsm_mask)
-        if wave_cm is not None:
-            wave_cm = fill_nan_with_nearest_sea(wave_cm, lsm_mask)
-    return {
+    step_data = {
         "step": int(step),
         "lats": lats, "lons": lons,
         "u10": u, "v10": v,
@@ -667,6 +654,28 @@ def load_step_data(step, lsm_mask=None):
                   "cloud_cover": cloud_cover["file"], "pressure": pressure["file"],
                   "wave_height": wave_height["file"] if wave_height else None}
     }
+    return apply_coastal_fill_to_step_data(step_data, lsm_mask)
+
+
+def apply_coastal_fill_to_step_data(data, lsm_mask):
+    if lsm_mask is None:
+        return data
+    for key in [
+        "u10",
+        "v10",
+        "wind_kmh",
+        "wind_dir_deg",
+        "gust_kmh",
+        "temperature_c",
+        "precipitation_accum_mm",
+        "precipitation_mm",
+        "cloud_cover_pct",
+        "pressure_hpa",
+        "wave_height_cm",
+    ]:
+        if data.get(key) is not None:
+            data[key] = fill_nan_with_nearest_sea(data[key], lsm_mask)
+    return data
 
 
 def render_wind(data, meta, frame_idx):
@@ -964,7 +973,7 @@ def main():
             if mapped_lsm is None:
                 mapped_lsm = map_lsm_to_target(land_sea_mask, data["lats"], data["lons"])
                 if mapped_lsm is not None:
-                    data = load_step_data(step, lsm_mask=mapped_lsm)
+                    data = apply_coastal_fill_to_step_data(data, mapped_lsm)
             current_accum = np.asarray(data["precipitation_accum_mm"], dtype=float)
             if previous_rain_accum is None:
                 rain_step = np.maximum(current_accum, 0)

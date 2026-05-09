@@ -83,6 +83,7 @@ ARDEA_SEA = {"name": "Mare davanti Ardea", "lat": 41.585, "lon": 12.425}
 
 UPSCALE_FACTOR = 4
 SMOOTH_SIGMA = 1.15
+COASTAL_FILL_RADIUS = 4
 FIG_W = 13.2
 FIG_H = 8.2
 DPI = 150
@@ -122,6 +123,7 @@ FILE_ALIASES = {
     "cloud_cover": ["cloud_cover_h{step:03d}.grib", "tcc_h{step:03d}.grib"],
     "pressure": ["pressure_h{step:03d}.grib", "msl_h{step:03d}.grib", "mslp_h{step:03d}.grib"],
     "wave_height": ["wave_height_h{step:03d}.grib", "swh_h{step:03d}.grib"],
+    "lsm": ["lsm.grib"],
 }
 
 SUMMARY = {
@@ -347,6 +349,54 @@ def read_field(varname, step, required=True):
     return {"file": fp.name, "lats": lats, "lons": lons, "data": data}
 
 
+def load_land_sea_mask():
+    fp = INPUT_DIR / "lsm.grib"
+    if not fp.exists():
+        add_warning("LSM non trovato (input/ecmwf/lsm.grib): skip coastal fill immagini")
+        return None
+    lats, lons, data = open_grib(fp)
+    lats, lons, data = crop_bbox(lats, lons, data)
+    lats, lons, data = upscale_field(lats, lons, data, UPSCALE_FACTOR)
+    data = np.clip(np.asarray(data, dtype=float), 0, 1)
+    return {"file": fp.name, "lats": lats, "lons": lons, "data": data}
+
+
+def map_lsm_to_target(lsm, target_lats, target_lons):
+    if lsm is None:
+        return None
+    if len(lsm["lats"]) == len(target_lats) and len(lsm["lons"]) == len(target_lons):
+        return np.asarray(lsm["data"], dtype=float)
+    lsm_lats = np.asarray(lsm["lats"], dtype=float)
+    lsm_lons = np.asarray(lsm["lons"], dtype=float)
+    lat_idx = np.abs(lsm_lats[:, None] - np.asarray(target_lats, dtype=float)[None, :]).argmin(axis=0)
+    lon_idx = np.abs(lsm_lons[:, None] - np.asarray(target_lons, dtype=float)[None, :]).argmin(axis=0)
+    return np.asarray(lsm["data"], dtype=float)[np.ix_(lat_idx, lon_idx)]
+
+
+def fill_nan_with_nearest_sea(data, lsm_mask, radius=COASTAL_FILL_RADIUS):
+    if lsm_mask is None:
+        return data
+    arr = np.asarray(data, dtype=float)
+    filled = arr.copy()
+    sea_mask = np.asarray(lsm_mask, dtype=float) <= 0.5
+    if arr.shape != sea_mask.shape:
+        return filled
+    if not np.isnan(arr).any():
+        return filled
+    nan_positions = np.argwhere(~np.isfinite(arr) & sea_mask)
+    for (y, x) in nan_positions:
+        r0 = max(0, y - radius)
+        r1 = min(arr.shape[0], y + radius + 1)
+        c0 = max(0, x - radius)
+        c1 = min(arr.shape[1], x + radius + 1)
+        window = arr[r0:r1, c0:c1]
+        window_sea = sea_mask[r0:r1, c0:c1]
+        valid = window[np.isfinite(window) & window_sea]
+        if valid.size:
+            filled[y, x] = float(valid[0])
+    return filled
+
+
 def wind_kmh_from_uv(u, v):
     return np.sqrt(u ** 2 + v ** 2) * 3.6
 
@@ -568,7 +618,7 @@ def add_raster(ax, lats, lons, data, cmap, alpha, zorder, vmin=None, vmax=None):
               interpolation="bicubic", zorder=zorder, vmin=vmin, vmax=vmax)
 
 
-def load_step_data(step):
+def load_step_data(step, lsm_mask=None):
     u10 = read_field("u10", step, required=True)
     v10 = read_field("v10", step, required=True)
     temperature = read_field("temperature", step, required=True)
@@ -587,6 +637,18 @@ def load_step_data(step):
     cloud_pct = cloud_to_pct(cloud_cover["data"])
     pressure_hpa = pressure_to_hpa(pressure["data"])
     wave_cm = wave_to_cm(wave_height["data"]) if wave_height is not None else None
+    if lsm_mask is not None:
+        u = fill_nan_with_nearest_sea(u, lsm_mask)
+        v = fill_nan_with_nearest_sea(v, lsm_mask)
+        wind_kmh = fill_nan_with_nearest_sea(wind_kmh, lsm_mask)
+        wind_dir = fill_nan_with_nearest_sea(wind_dir, lsm_mask)
+        gust_kmh = fill_nan_with_nearest_sea(gust_kmh, lsm_mask)
+        temp_c = fill_nan_with_nearest_sea(temp_c, lsm_mask)
+        rain_accum_mm = fill_nan_with_nearest_sea(rain_accum_mm, lsm_mask)
+        cloud_pct = fill_nan_with_nearest_sea(cloud_pct, lsm_mask)
+        pressure_hpa = fill_nan_with_nearest_sea(pressure_hpa, lsm_mask)
+        if wave_cm is not None:
+            wave_cm = fill_nan_with_nearest_sea(wave_cm, lsm_mask)
     return {
         "step": int(step),
         "lats": lats, "lons": lons,
@@ -876,10 +938,12 @@ def main():
     if not steps:
         raise RuntimeError("Nessuno step trovato.")
     log(f"Step trovati: {steps}")
+    land_sea_mask = load_land_sea_mask()
+    mapped_lsm = None
     manifest = {
         "ok": True,
         "project": "Meteo Italia Smooth Render",
-        "version": "2.3-fixed-webp-dimensions",
+        "version": "2.4-lsm-coastal-fill",
         "created_at": datetime.now().isoformat(),
         "source": "ECMWF Open Data / local GRIB render",
         "bbox": BBOX,
@@ -896,7 +960,11 @@ def main():
         log(f"STEP H+{step:03d}")
         log("------------------------------------------")
         try:
-            data = load_step_data(step)
+            data = load_step_data(step, lsm_mask=mapped_lsm)
+            if mapped_lsm is None:
+                mapped_lsm = map_lsm_to_target(land_sea_mask, data["lats"], data["lons"])
+                if mapped_lsm is not None:
+                    data = load_step_data(step, lsm_mask=mapped_lsm)
             current_accum = np.asarray(data["precipitation_accum_mm"], dtype=float)
             if previous_rain_accum is None:
                 rain_step = np.maximum(current_accum, 0)

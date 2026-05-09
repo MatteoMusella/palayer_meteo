@@ -67,6 +67,7 @@ INPUT_DIR = BASE_DIR / "input" / "ecmwf"
 OUTPUT_DIR = BASE_DIR / "output" / "ecmwf"
 FRAMES_DIR = OUTPUT_DIR / "frames"
 ANIM_DIR = OUTPUT_DIR / "animations"
+LSM_GRIB_PATH = INPUT_DIR / "lsm.grib"
 
 CARTOPY_DATA_DIR = BASE_DIR / "cartopy_data"
 cartopy.config["data_dir"] = str(CARTOPY_DATA_DIR)
@@ -349,7 +350,7 @@ def read_field(varname, step, required=True):
 
 
 def load_land_sea_mask():
-    fp = INPUT_DIR / "lsm.grib"
+    fp = LSM_GRIB_PATH
     if not fp.exists():
         add_warning(f"LSM non trovato ({fp}): skip coastal fill immagini")
         return None

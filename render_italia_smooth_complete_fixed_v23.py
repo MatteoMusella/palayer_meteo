@@ -351,7 +351,7 @@ def read_field(varname, step, required=True):
 def load_land_sea_mask():
     fp = INPUT_DIR / "lsm.grib"
     if not fp.exists():
-        add_warning("LSM non trovato (input/ecmwf/lsm.grib): skip coastal fill immagini")
+        add_warning(f"LSM non trovato ({fp}): skip coastal fill immagini")
         return None
     lats, lons, data = open_grib(fp)
     lats, lons, data = crop_bbox(lats, lons, data)

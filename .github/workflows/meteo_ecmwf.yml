@@ -1,0 +1,65 @@
+name: Meteo ECMWF automatico
+
+on:
+  workflow_dispatch:
+
+  schedule:
+    # Orari in UTC.
+    # 07:15 UTC = 09:15 Italia con ora legale
+    # 19:15 UTC = 21:15 Italia con ora legale
+    - cron: "15 7,19 * * *"
+
+jobs:
+  meteo:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+
+    steps:
+      - name: Scarica repository
+        uses: actions/checkout@v4
+
+      - name: Installa Miniforge
+        uses: conda-incubator/setup-miniconda@v3
+        with:
+          miniforge-version: latest
+          activate-environment: meteo
+          python-version: "3.11"
+          auto-activate-base: false
+          channels: conda-forge
+          channel-priority: strict
+
+      - name: Installa dipendenze Conda
+        shell: bash -l {0}
+        run: |
+          conda activate meteo
+          conda install -c conda-forge eccodes cartopy cfgrib xarray netcdf4 -y
+
+      - name: Installa dipendenze Python
+        shell: bash -l {0}
+        run: |
+          conda activate meteo
+          python -m pip install --upgrade pip
+          python -m pip install ecmwf-opendata requests numpy pandas matplotlib pillow tqdm
+
+      - name: Test ECMWF
+        shell: bash -l {0}
+        run: |
+          conda activate meteo
+          python -c "from ecmwf.opendata import Client; print('ECMWF OK')"
+
+      - name: Esegui pipeline meteo
+        shell: bash -l {0}
+        run: |
+          conda activate meteo
+
+          echo "1) Download ECMWF"
+          python ecmwf_download.py
+
+          echo "2) Export JSON Italia"
+          python export_meteo_json_italia.py
+
+          echo "3) Render immagini Italia"
+          python render_italia_smooth_complete_fixed_v23.py
+
+          echo "4) Upload output"
+          python ecmwf_upload.py

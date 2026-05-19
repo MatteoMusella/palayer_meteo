@@ -18,4 +18,4 @@ jobs:
           # pip install -r requirements.txt
       - name: Run upload_ecmwf
         run: |
-          python upload_ecmwf.py
+          python ecmwf_upload.py

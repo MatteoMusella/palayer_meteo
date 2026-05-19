@@ -14,7 +14,6 @@ from ecmwf.opendata import Client
 # Scarica:
 # - meteo IFS: vento, raffiche, temp, pioggia, nuvole, pressione
 # - onde ECMWF Wave: swh
-# - land/sea mask: lsm
 #
 # Output compatibile con render.py:
 #
@@ -28,7 +27,6 @@ from ecmwf.opendata import Client
 #   cloud_cover_h003.grib
 #   pressure_h003.grib
 #   wave_height_h003.grib
-#   lsm.grib
 # ============================================================
 
 
@@ -47,7 +45,7 @@ INPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 # ECMWF Open Data.
 # Puoi cambiare source in "aws", "azure" o "google" se ECMWF è lento.
-CLIENT_SOURCE = "ecmwf"
+CLIENT_SOURCE = "azure"
 CLIENT_MODEL = "ifs"
 CLIENT_RESOL = "0p25"
 
@@ -64,7 +62,7 @@ REQUEST_PAUSE_SECONDS = 0.35
 DOWNLOAD_WAVES = True
 
 # Se vuoi forzare un run specifico, imposta ad esempio:
-# FORCE_RUN_DATE = "20260506"
+# FORCE_RUN_DATE = "20260517"
 # FORCE_RUN_TIME = 6
 FORCE_RUN_DATE = None
 FORCE_RUN_TIME = None
@@ -119,16 +117,6 @@ METEO_PARAMS = {
     },
 }
 
-# Land/sea mask ECMWF (statico)
-LAND_SEA_MASK = {
-    "output_prefix": "lsm",
-    "param": "lsm",
-    "required": False,
-    "description": "Land sea mask (0 sea, 1 land)",
-    "type": "an",
-    "step": 0,
-}
-
 
 # ============================================================
 # PARAMETRI ONDE
@@ -172,7 +160,6 @@ WAVE_ATTEMPTS = [
 # LOG
 # ============================================================
 
-
 def log(msg):
     print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {msg}")
 
@@ -180,7 +167,6 @@ def log(msg):
 # ============================================================
 # UTILS
 # ============================================================
-
 
 def clean_old_files():
     if not CLEAN_OLD_FILES:
@@ -266,7 +252,6 @@ def safe_unlink(path):
 # DOWNLOAD METEO
 # ============================================================
 
-
 def retrieve_meteo_one(client, param_key, param_info, run_date, run_time, step):
     output_prefix = param_info["output_prefix"]
     target = INPUT_DIR / f"{output_prefix}_h{int(step):03d}.grib"
@@ -349,53 +334,8 @@ def download_meteo(client, run_date, run_time, summary):
 
 
 # ============================================================
-# DOWNLOAD LAND/SEA MASK
-# ============================================================
-
-
-def download_land_sea_mask(client, run_date, run_time, summary):
-    output_prefix = LAND_SEA_MASK["output_prefix"]
-    target = INPUT_DIR / f"{output_prefix}.grib"
-    tmp = INPUT_DIR / f"__tmp_{output_prefix}.grib"
-
-    safe_unlink(target)
-    safe_unlink(tmp)
-
-    try:
-        log(
-            f"Scarico LSM (land/sea mask) "
-            f"param={LAND_SEA_MASK['param']} type={LAND_SEA_MASK['type']} step={LAND_SEA_MASK['step']:03d}"
-        )
-
-        client.retrieve(
-            date=run_date,
-            time=run_time,
-            type=LAND_SEA_MASK["type"],
-            step=int(LAND_SEA_MASK["step"]),
-            param=LAND_SEA_MASK["param"],
-            target=str(tmp),
-        )
-
-        if file_is_valid(tmp):
-            tmp.rename(target)
-            log(f"OK LSM: {target.name} ({target.stat().st_size / 1024:.1f} KB)")
-            summary["downloaded"].setdefault("lsm", []).append(LAND_SEA_MASK["step"])
-            return True
-
-        raise RuntimeError(f"File LSM non valido o troppo piccolo: {tmp}")
-
-    except Exception as e:
-        safe_unlink(tmp)
-        err = f"lsm H+{LAND_SEA_MASK['step']:03d}: {e}"
-        summary["missing_optional"].setdefault("lsm", []).append(LAND_SEA_MASK["step"])
-        log(f"LSM non disponibile: {err}")
-        return False
-
-
-# ============================================================
 # DOWNLOAD ONDE
 # ============================================================
-
 
 def retrieve_wave_one(client, run_date, run_time, step):
     output_prefix = WAVE_PARAM["output_prefix"]
@@ -484,7 +424,6 @@ def download_waves(client, run_date, run_time, summary):
 # MAIN
 # ============================================================
 
-
 def main():
     log("==========================================")
     log("ARDEA METEO PLAYER 1.0 - ECMWF OPEN DATA")
@@ -523,7 +462,6 @@ def main():
 
     download_meteo(client, run_date, run_time, summary)
     download_waves(client, run_date, run_time, summary)
-    download_land_sea_mask(client, run_date, run_time, summary)
 
     summary_path = INPUT_DIR / "download_summary.json"
     summary_path.write_text(

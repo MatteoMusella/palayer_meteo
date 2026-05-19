@@ -1,0 +1,368 @@
+name: Meteo ECMWF automatico test
+
+on:
+  workflow_dispatch:
+
+  schedule:
+    # Orari in UTC.
+    # 07:15 UTC = 09:15 Italia con ora legale
+    # 19:15 UTC = 21:15 Italia con ora legale
+    - cron: "15 7,19 * * *"
+
+jobs:
+  meteo:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+
+    env:
+      PROJECT_DIR: ${{ github.workspace }}
+
+      INPUT_DIR: ${{ github.workspace }}/input
+      INPUT_ECMWF_DIR: ${{ github.workspace }}/input/ecmwf
+
+      OUTPUT_DIR: ${{ github.workspace }}/output
+      OUTPUT_INTERACTIVE_DIR: ${{ github.workspace }}/output/interactive
+
+      ECMWF_DIR: ${{ github.workspace }}/output/ecmwf
+      ECMWF_ANIMATIONS_DIR: ${{ github.workspace }}/output/ecmwf/animations
+      ECMWF_FORECAST_PNG_DIR: ${{ github.workspace }}/output/ecmwf/forecast_png
+      ECMWF_DATA_DIR: ${{ github.workspace }}/output/ecmwf/data
+
+      UPLOAD_STATE_DIR: ${{ github.workspace }}/upload_state
+
+      LOCAL_DATA_DIR: ${{ github.workspace }}/output/interactive
+      LOCAL_FORECAST_ROOT: ${{ github.workspace }}/output
+
+      FTP_HOST: ${{ secrets.FTP_HOST }}
+      FTP_USER: ${{ secrets.FTP_USER }}
+      FTP_PASS: ${{ secrets.FTP_PASS }}
+      FTP_PORT: 21
+
+      FTP_REMOTE_DATA_DIR: /www.igest.eu/wp-content/plugins/meteo/data
+      FTP_REMOTE_FORECAST_DIR: /www.igest.eu/wp-content/plugins/meteo/forecast_png
+
+      FTP_TIMEOUT_SECONDS: 60
+      FTP_RETRIES: 6
+      FTP_RETRY_SLEEP_SECONDS: 4
+      FTP_BATCH_SIZE: 40
+      FTP_FILE_RETRIES: 3
+      FTP_FILE_RETRY_SLEEP_SECONDS: 2
+      SKIP_MISSING_FILES: true
+
+    steps:
+      - name: Scarica repository
+        uses: actions/checkout@v4
+
+      - name: Verifica struttura cartelle repository
+        shell: bash -l {0}
+        run: |
+          echo "=========================================="
+          echo "CONTROLLO STRUTTURA CARTELLE REPOSITORY"
+          echo "=========================================="
+          echo "Data controllo: $(date '+%Y-%m-%d %H:%M:%S')"
+          echo "PROJECT_DIR=$PROJECT_DIR"
+          echo ""
+
+          echo "Contenuto root repository:"
+          ls -la "$PROJECT_DIR"
+          echo ""
+
+          ERROR=0
+
+          check_dir() {
+            local DIR="$1"
+            local LABEL="$2"
+
+            echo "------------------------------------------"
+            echo "Controllo: $LABEL"
+            echo "Path: $DIR"
+
+            if [ -e "$DIR" ] && [ ! -d "$DIR" ]; then
+              echo "ERRORE: $LABEL esiste ma NON è una cartella."
+              echo "Dettaglio:"
+              file "$DIR" || true
+              ls -la "$DIR" || true
+              ERROR=1
+              return
+            fi
+
+            if [ ! -d "$DIR" ]; then
+              echo "ERRORE: cartella mancante: $DIR"
+              ERROR=1
+              return
+            fi
+
+            echo "OK: cartella presente"
+            ls -ld "$DIR"
+          }
+
+          check_dir "$INPUT_DIR" "input"
+          check_dir "$INPUT_ECMWF_DIR" "input/ecmwf"
+
+          check_dir "$OUTPUT_DIR" "output"
+          check_dir "$OUTPUT_INTERACTIVE_DIR" "output/interactive"
+
+          check_dir "$ECMWF_DIR" "output/ecmwf"
+          check_dir "$ECMWF_ANIMATIONS_DIR" "output/ecmwf/animations"
+          check_dir "$ECMWF_FORECAST_PNG_DIR" "output/ecmwf/forecast_png"
+          check_dir "$ECMWF_DATA_DIR" "output/ecmwf/data"
+
+          check_dir "$UPLOAD_STATE_DIR" "upload_state"
+
+          echo "------------------------------------------"
+          echo "Albero cartelle principali:"
+          find "$PROJECT_DIR" -maxdepth 4 -type d | sort
+          echo "------------------------------------------"
+
+          if [ "$ERROR" -ne 0 ]; then
+            echo ""
+            echo "=========================================="
+            echo "ERRORE STRUTTURA CARTELLE"
+            echo "=========================================="
+            echo "La pipeline si blocca perché una o più cartelle sono mancanti"
+            echo "oppure esiste un file al posto di una cartella."
+            echo ""
+            echo "Cartelle richieste:"
+            echo "- input/"
+            echo "- input/ecmwf/"
+            echo "- output/"
+            echo "- output/interactive/"
+            echo "- output/ecmwf/"
+            echo "- output/ecmwf/animations/"
+            echo "- output/ecmwf/forecast_png/"
+            echo "- output/ecmwf/data/"
+            echo "- upload_state/"
+            echo ""
+            echo "Correggi il repository aggiungendo le cartelle con .gitkeep e rilancia l'Action."
+            exit 1
+          fi
+
+          echo ""
+          echo "=========================================="
+          echo "STRUTTURA CARTELLE OK"
+          echo "=========================================="
+          echo "La pipeline può proseguire."
+
+      - name: Verifica file principali pipeline
+        shell: bash -l {0}
+        run: |
+          echo "=========================================="
+          echo "CONTROLLO FILE PYTHON PRINCIPALI"
+          echo "=========================================="
+
+          ERROR=0
+
+          check_file() {
+            local FILE="$1"
+
+            echo "Controllo file: $FILE"
+
+            if [ ! -f "$PROJECT_DIR/$FILE" ]; then
+              echo "ERRORE: file mancante: $FILE"
+              ERROR=1
+            else
+              echo "OK: $FILE"
+            fi
+          }
+
+          check_file "ecmwf_download.py"
+          check_file "export_meteo_json_italia.py"
+          check_file "render_italia_smooth_complete_fixed_v23.py"
+          check_file "ecmwf_upload.py"
+
+          if [ "$ERROR" -ne 0 ]; then
+            echo "Uno o più file Python sono mancanti. Blocco la pipeline."
+            exit 1
+          fi
+
+          echo "Tutti i file Python principali sono presenti."
+
+      - name: Verifica variabili FTP
+        shell: bash -l {0}
+        run: |
+          echo "=========================================="
+          echo "CONTROLLO VARIABILI FTP"
+          echo "=========================================="
+
+          ERROR=0
+
+          if [ -z "$FTP_HOST" ]; then
+            echo "ERRORE: FTP_HOST non impostato nei GitHub Secrets"
+            ERROR=1
+          else
+            echo "OK: FTP_HOST impostato"
+          fi
+
+          if [ -z "$FTP_USER" ]; then
+            echo "ERRORE: FTP_USER non impostato nei GitHub Secrets"
+            ERROR=1
+          else
+            echo "OK: FTP_USER impostato"
+          fi
+
+          if [ -z "$FTP_PASS" ]; then
+            echo "ERRORE: FTP_PASS non impostato nei GitHub Secrets"
+            ERROR=1
+          else
+            echo "OK: FTP_PASS impostato"
+          fi
+
+          echo "FTP_REMOTE_DATA_DIR=$FTP_REMOTE_DATA_DIR"
+          echo "FTP_REMOTE_FORECAST_DIR=$FTP_REMOTE_FORECAST_DIR"
+
+          if [ "$ERROR" -ne 0 ]; then
+            echo "Variabili FTP mancanti. Blocco la pipeline prima del download."
+            exit 1
+          fi
+
+          echo "Variabili FTP OK."
+
+      - name: Installa Miniforge
+        uses: conda-incubator/setup-miniconda@v3
+        with:
+          miniforge-version: latest
+          activate-environment: meteo
+          python-version: "3.11"
+          auto-activate-base: false
+          channels: conda-forge
+          channel-priority: strict
+
+      - name: Installa dipendenze Conda
+        shell: bash -l {0}
+        run: |
+          conda activate meteo
+
+          echo "=========================================="
+          echo "INSTALLO DIPENDENZE CONDA"
+          echo "=========================================="
+
+          conda install -c conda-forge eccodes cartopy cfgrib xarray netcdf4 -y
+
+      - name: Installa dipendenze Python
+        shell: bash -l {0}
+        run: |
+          conda activate meteo
+
+          echo "=========================================="
+          echo "INSTALLO DIPENDENZE PYTHON"
+          echo "=========================================="
+
+          python -m pip install --upgrade pip
+          python -m pip install ecmwf-opendata requests numpy pandas matplotlib pillow tqdm
+
+      - name: Test ambiente ECMWF
+        shell: bash -l {0}
+        run: |
+          conda activate meteo
+
+          echo "=========================================="
+          echo "TEST ECMWF"
+          echo "=========================================="
+
+          python -c "from ecmwf.opendata import Client; print('ECMWF OK')"
+
+      - name: Riepilogo cartelle prima del download
+        shell: bash -l {0}
+        run: |
+          echo "=========================================="
+          echo "RIEPILOGO CARTELLE PRIMA DEL DOWNLOAD"
+          echo "=========================================="
+
+          echo "INPUT_ECMWF_DIR=$INPUT_ECMWF_DIR"
+          echo "OUTPUT_DIR=$OUTPUT_DIR"
+          echo "OUTPUT_INTERACTIVE_DIR=$OUTPUT_INTERACTIVE_DIR"
+          echo "ECMWF_DIR=$ECMWF_DIR"
+          echo "ECMWF_ANIMATIONS_DIR=$ECMWF_ANIMATIONS_DIR"
+          echo "ECMWF_FORECAST_PNG_DIR=$ECMWF_FORECAST_PNG_DIR"
+          echo "ECMWF_DATA_DIR=$ECMWF_DATA_DIR"
+          echo "UPLOAD_STATE_DIR=$UPLOAD_STATE_DIR"
+
+          echo ""
+          echo "Cartelle output:"
+          find "$OUTPUT_DIR" -maxdepth 5 -type d | sort
+
+      - name: Esegui pipeline meteo
+        shell: bash -l {0}
+        run: |
+          conda activate meteo
+
+          echo "=========================================="
+          echo "VARIABILI ATTIVE"
+          echo "=========================================="
+          echo "PWD=$(pwd)"
+          echo "PROJECT_DIR=$PROJECT_DIR"
+          echo "INPUT_ECMWF_DIR=$INPUT_ECMWF_DIR"
+          echo "OUTPUT_DIR=$OUTPUT_DIR"
+          echo "OUTPUT_INTERACTIVE_DIR=$OUTPUT_INTERACTIVE_DIR"
+          echo "ECMWF_DIR=$ECMWF_DIR"
+          echo "ECMWF_ANIMATIONS_DIR=$ECMWF_ANIMATIONS_DIR"
+          echo "ECMWF_FORECAST_PNG_DIR=$ECMWF_FORECAST_PNG_DIR"
+          echo "ECMWF_DATA_DIR=$ECMWF_DATA_DIR"
+          echo "LOCAL_DATA_DIR=$LOCAL_DATA_DIR"
+          echo "LOCAL_FORECAST_ROOT=$LOCAL_FORECAST_ROOT"
+          echo "FTP_HOST=$FTP_HOST"
+          echo "FTP_USER impostato? $([ -n "$FTP_USER" ] && echo SI || echo NO)"
+          echo "FTP_PASS impostato? $([ -n "$FTP_PASS" ] && echo SI || echo NO)"
+          echo "=========================================="
+
+          echo "=========================================="
+          echo "1) DOWNLOAD ECMWF"
+          echo "=========================================="
+          python ecmwf_download.py
+
+          echo "=========================================="
+          echo "2) EXPORT JSON ITALIA"
+          echo "=========================================="
+          python export_meteo_json_italia.py
+
+          echo "=========================================="
+          echo "3) RENDER IMMAGINI ITALIA"
+          echo "=========================================="
+          python render_italia_smooth_complete_fixed_v23.py
+
+          echo "=========================================="
+          echo "SINCRONIZZO EVENTUALI FILE JSON"
+          echo "=========================================="
+
+          cp "$ECMWF_DIR"/*.json "$OUTPUT_INTERACTIVE_DIR"/ 2>/dev/null || true
+          cp "$ECMWF_DIR"/*.json.gz "$OUTPUT_INTERACTIVE_DIR"/ 2>/dev/null || true
+          cp "$ECMWF_DATA_DIR"/*.json "$OUTPUT_INTERACTIVE_DIR"/ 2>/dev/null || true
+          cp "$ECMWF_DATA_DIR"/*.json.gz "$OUTPUT_INTERACTIVE_DIR"/ 2>/dev/null || true
+
+          echo "=========================================="
+          echo "DEBUG FILE GENERATI"
+          echo "=========================================="
+          find "$OUTPUT_DIR" -maxdepth 8 -type f | sort || true
+          echo "=========================================="
+
+          echo "=========================================="
+          echo "4) UPLOAD OUTPUT"
+          echo "=========================================="
+          python ecmwf_upload.py --all --reset-state
+
+      - name: Debug finale output
+        if: always()
+        shell: bash -l {0}
+        run: |
+          echo "=========================================="
+          echo "DEBUG FINALE"
+          echo "=========================================="
+
+          echo "Cartella corrente:"
+          pwd
+
+          echo ""
+          echo "Struttura cartelle:"
+          find "$PROJECT_DIR" -maxdepth 4 -type d | sort || true
+
+          echo ""
+          echo "File output:"
+          find "$OUTPUT_DIR" -maxdepth 8 -type f | sort || true
+
+          echo ""
+          echo "Log scheduler se presente:"
+          if [ -f "$PROJECT_DIR/scheduler_log.txt" ]; then
+            tail -n 160 "$PROJECT_DIR/scheduler_log.txt"
+          else
+            echo "scheduler_log.txt non presente"
+          fi

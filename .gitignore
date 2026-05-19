@@ -1,0 +1,35 @@
+# File e cartelle generate dalla pipeline
+input/*
+output/*
+upload_state/*
+
+# Mantieni solo le cartelle vuote nel repo
+!input/.gitkeep
+!input/ecmwf/
+!input/ecmwf/.gitkeep
+
+!output/.gitkeep
+!output/interactive/
+!output/interactive/.gitkeep
+!output/ecmwf/
+!output/ecmwf/.gitkeep
+!output/ecmwf/animations/
+!output/ecmwf/animations/.gitkeep
+!output/ecmwf/forecast_png/
+!output/ecmwf/forecast_png/.gitkeep
+!output/ecmwf/data/
+!output/ecmwf/data/.gitkeep
+
+!upload_state/.gitkeep
+
+# Cache/log/file inutili
+scheduler_log.txt
+cartopy_data/
+Miniforge3-Linux-x86_64.sh
+89.46.104.211
+__pycache__/
+*.pyc
+*.grib
+*.grib2
+*.idx
+*.nc

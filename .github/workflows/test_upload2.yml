@@ -1,21 +1,149 @@
-name: Test upload_ecmwf
+name: Meteo ECMWF automatico
 
 on:
   workflow_dispatch:
 
+  schedule:
+    # Orari in UTC.
+    # 07:15 UTC = 09:15 Italia con ora legale
+    # 19:15 UTC = 21:15 Italia con ora legale
+    - cron: "15 7,19 * * *"
+
 jobs:
-  test-upload:
+  meteo:
     runs-on: ubuntu-latest
+    timeout-minutes: 360
+
+    env:
+      PROJECT_DIR: ${{ github.workspace }}
+
+      OUTPUT_DIR: ${{ github.workspace }}/output
+      OUTPUT_INTERACTIVE_DIR: ${{ github.workspace }}/output/interactive
+
+      ECMWF_DIR: ${{ github.workspace }}/output/ecmwf
+      ECMWF_ANIMATIONS_DIR: ${{ github.workspace }}/output/ecmwf/animations
+      ECMWF_FORECAST_PNG_DIR: ${{ github.workspace }}/output/ecmwf/forecast_png
+      ECMWF_DATA_DIR: ${{ github.workspace }}/output/ecmwf/data
+
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-python@v5
+      - name: Scarica repository
+        uses: actions/checkout@v4
+
+      - name: Prepara cartelle progetto
+        shell: bash -l {0}
+        run: |
+          echo "Cartella progetto:"
+          echo "$PROJECT_DIR"
+
+          echo "Creo cartelle locali se mancanti"
+
+          mkdir -p "$OUTPUT_DIR"
+          mkdir -p "$OUTPUT_INTERACTIVE_DIR"
+
+          mkdir -p "$ECMWF_DIR"
+          mkdir -p "$ECMWF_ANIMATIONS_DIR"
+          mkdir -p "$ECMWF_FORECAST_PNG_DIR"
+          mkdir -p "$ECMWF_DATA_DIR"
+
+          echo "Cartelle pronte:"
+          ls -la "$PROJECT_DIR"
+          echo ""
+          find "$OUTPUT_DIR" -maxdepth 4 -type d | sort
+
+      - name: Installa Miniforge
+        uses: conda-incubator/setup-miniconda@v3
         with:
-          python-version: "3.x"
-      - name: Install deps
+          miniforge-version: latest
+          activate-environment: meteo
+          python-version: "3.11"
+          auto-activate-base: false
+          channels: conda-forge
+          channel-priority: strict
+
+      - name: Installa dipendenze Conda
+        shell: bash -l {0}
         run: |
+          conda activate meteo
+          conda install -c conda-forge eccodes cartopy cfgrib xarray netcdf4 -y
+
+      - name: Installa dipendenze Python
+        shell: bash -l {0}
+        run: |
+          conda activate meteo
           python -m pip install --upgrade pip
-          # se hai requirements.txt:
-          # pip install -r requirements.txt
-      - name: Run upload_ecmwf
+          python -m pip install ecmwf-opendata requests numpy pandas matplotlib pillow tqdm
+
+      - name: Test ECMWF
+        shell: bash -l {0}
         run: |
+          conda activate meteo
+          python -c "from ecmwf.opendata import Client; print('ECMWF OK')"
+
+      - name: Ricontrolla cartelle prima del download
+        shell: bash -l {0}
+        run: |
+          echo "Verifico e ricreo eventuali cartelle mancanti prima del download"
+
+          mkdir -p "$OUTPUT_DIR"
+          mkdir -p "$OUTPUT_INTERACTIVE_DIR"
+
+          mkdir -p "$ECMWF_DIR"
+          mkdir -p "$ECMWF_ANIMATIONS_DIR"
+          mkdir -p "$ECMWF_FORECAST_PNG_DIR"
+          mkdir -p "$ECMWF_DATA_DIR"
+
+          echo "Cartelle disponibili:"
+          find "$OUTPUT_DIR" -maxdepth 4 -type d | sort
+
+      - name: Esegui pipeline meteo
+        shell: bash -l {0}
+        run: |
+          conda activate meteo
+
+          echo "=========================================="
+          echo "VARIABILI CARTELLE"
+          echo "=========================================="
+          echo "PROJECT_DIR=$PROJECT_DIR"
+          echo "OUTPUT_DIR=$OUTPUT_DIR"
+          echo "OUTPUT_INTERACTIVE_DIR=$OUTPUT_INTERACTIVE_DIR"
+          echo "ECMWF_DIR=$ECMWF_DIR"
+          echo "ECMWF_ANIMATIONS_DIR=$ECMWF_ANIMATIONS_DIR"
+          echo "ECMWF_FORECAST_PNG_DIR=$ECMWF_FORECAST_PNG_DIR"
+          echo "ECMWF_DATA_DIR=$ECMWF_DATA_DIR"
+          echo "=========================================="
+
+          echo "Creo nuovamente cartelle di sicurezza"
+          mkdir -p "$OUTPUT_DIR"
+          mkdir -p "$OUTPUT_INTERACTIVE_DIR"
+          mkdir -p "$ECMWF_DIR"
+          mkdir -p "$ECMWF_ANIMATIONS_DIR"
+          mkdir -p "$ECMWF_FORECAST_PNG_DIR"
+          mkdir -p "$ECMWF_DATA_DIR"
+
+          echo "1) Download ECMWF"
+          python ecmwf_download.py
+
+          echo "2) Export JSON Italia"
+          python export_meteo_json_italia.py
+
+          echo "3) Render immagini Italia"
+          python render_italia_smooth_complete_fixed_v23.py
+
+          echo "Sincronizzo file utili per upload"
+
+          # Se vengono creati JSON dentro output/ecmwf, li copio anche in output/interactive
+          cp "$ECMWF_DIR"/*.json "$OUTPUT_INTERACTIVE_DIR"/ 2>/dev/null || true
+          cp "$ECMWF_DIR"/*.json.gz "$OUTPUT_INTERACTIVE_DIR"/ 2>/dev/null || true
+
+          # Se vengono create animazioni WEBP, mantengo anche una copia in output/interactive/animations
+          mkdir -p "$OUTPUT_INTERACTIVE_DIR/animations"
+          cp "$ECMWF_ANIMATIONS_DIR"/*.webp "$OUTPUT_INTERACTIVE_DIR/animations"/ 2>/dev/null || true
+
+          echo "=========================================="
+          echo "DEBUG FILE GENERATI"
+          echo "=========================================="
+          find "$OUTPUT_DIR" -maxdepth 6 -type f | sort || true
+          echo "=========================================="
+
+          echo "4) Upload output"
           python ecmwf_upload.py

@@ -15,8 +15,10 @@ jobs:
     timeout-minutes: 360
 
     env:
+      # Cartella progetto GitHub Actions
       PROJECT_DIR: ${{ github.workspace }}
 
+      # Cartelle output locali
       OUTPUT_DIR: ${{ github.workspace }}/output
       OUTPUT_INTERACTIVE_DIR: ${{ github.workspace }}/output/interactive
 
@@ -25,30 +27,57 @@ jobs:
       ECMWF_FORECAST_PNG_DIR: ${{ github.workspace }}/output/ecmwf/forecast_png
       ECMWF_DATA_DIR: ${{ github.workspace }}/output/ecmwf/data
 
+      # Queste due sono lette dal nuovo ecmwf_upload.py
+      LOCAL_DATA_DIR: ${{ github.workspace }}/output/interactive
+      LOCAL_FORECAST_ROOT: ${{ github.workspace }}/output
+
+      # FTPS da GitHub Secrets
+      FTP_HOST: ${{ secrets.FTP_HOST }}
+      FTP_USER: ${{ secrets.FTP_USER }}
+      FTP_PASS: ${{ secrets.FTP_PASS }}
+      FTP_PORT: 21
+
+      FTP_REMOTE_DATA_DIR: /www.igest.eu/wp-content/plugins/meteo/data
+      FTP_REMOTE_FORECAST_DIR: /www.igest.eu/wp-content/plugins/meteo/forecast_png
+
+      # Upload robusto
+      FTP_TIMEOUT_SECONDS: 60
+      FTP_RETRIES: 6
+      FTP_RETRY_SLEEP_SECONDS: 4
+      FTP_BATCH_SIZE: 40
+      FTP_FILE_RETRIES: 3
+      FTP_FILE_RETRY_SLEEP_SECONDS: 2
+      SKIP_MISSING_FILES: true
+
     steps:
       - name: Scarica repository
         uses: actions/checkout@v4
 
-      - name: Prepara cartelle progetto
+      - name: Prepara cartelle output
         shell: bash -l {0}
         run: |
-          echo "Cartella progetto:"
-          echo "$PROJECT_DIR"
+          echo "=========================================="
+          echo "PREPARO CARTELLE"
+          echo "=========================================="
 
-          echo "Creo cartelle locali se mancanti"
+          echo "PROJECT_DIR=$PROJECT_DIR"
+          echo "OUTPUT_DIR=$OUTPUT_DIR"
+          echo "OUTPUT_INTERACTIVE_DIR=$OUTPUT_INTERACTIVE_DIR"
+          echo "ECMWF_DIR=$ECMWF_DIR"
+          echo "ECMWF_ANIMATIONS_DIR=$ECMWF_ANIMATIONS_DIR"
+          echo "ECMWF_FORECAST_PNG_DIR=$ECMWF_FORECAST_PNG_DIR"
+          echo "ECMWF_DATA_DIR=$ECMWF_DATA_DIR"
 
           mkdir -p "$OUTPUT_DIR"
           mkdir -p "$OUTPUT_INTERACTIVE_DIR"
-
           mkdir -p "$ECMWF_DIR"
           mkdir -p "$ECMWF_ANIMATIONS_DIR"
           mkdir -p "$ECMWF_FORECAST_PNG_DIR"
           mkdir -p "$ECMWF_DATA_DIR"
+          mkdir -p "$PROJECT_DIR/upload_state"
 
-          echo "Cartelle pronte:"
-          ls -la "$PROJECT_DIR"
-          echo ""
-          find "$OUTPUT_DIR" -maxdepth 4 -type d | sort
+          echo "Cartelle create/verificate:"
+          find "$OUTPUT_DIR" -maxdepth 5 -type d | sort || true
 
       - name: Installa Miniforge
         uses: conda-incubator/setup-miniconda@v3
@@ -64,36 +93,52 @@ jobs:
         shell: bash -l {0}
         run: |
           conda activate meteo
+
+          echo "=========================================="
+          echo "INSTALLO DIPENDENZE CONDA"
+          echo "=========================================="
+
           conda install -c conda-forge eccodes cartopy cfgrib xarray netcdf4 -y
 
       - name: Installa dipendenze Python
         shell: bash -l {0}
         run: |
           conda activate meteo
+
+          echo "=========================================="
+          echo "INSTALLO DIPENDENZE PYTHON"
+          echo "=========================================="
+
           python -m pip install --upgrade pip
           python -m pip install ecmwf-opendata requests numpy pandas matplotlib pillow tqdm
 
-      - name: Test ECMWF
+      - name: Test ambiente ECMWF
         shell: bash -l {0}
         run: |
           conda activate meteo
+
+          echo "=========================================="
+          echo "TEST ECMWF"
+          echo "=========================================="
+
           python -c "from ecmwf.opendata import Client; print('ECMWF OK')"
 
-      - name: Ricontrolla cartelle prima del download
+      - name: Controllo cartelle prima della pipeline
         shell: bash -l {0}
         run: |
-          echo "Verifico e ricreo eventuali cartelle mancanti prima del download"
+          echo "=========================================="
+          echo "RICONTROLLO CARTELLE PRIMA DEL DOWNLOAD"
+          echo "=========================================="
 
           mkdir -p "$OUTPUT_DIR"
           mkdir -p "$OUTPUT_INTERACTIVE_DIR"
-
           mkdir -p "$ECMWF_DIR"
           mkdir -p "$ECMWF_ANIMATIONS_DIR"
           mkdir -p "$ECMWF_FORECAST_PNG_DIR"
           mkdir -p "$ECMWF_DATA_DIR"
+          mkdir -p "$PROJECT_DIR/upload_state"
 
-          echo "Cartelle disponibili:"
-          find "$OUTPUT_DIR" -maxdepth 4 -type d | sort
+          find "$OUTPUT_DIR" -maxdepth 5 -type d | sort || true
 
       - name: Esegui pipeline meteo
         shell: bash -l {0}
@@ -101,8 +146,9 @@ jobs:
           conda activate meteo
 
           echo "=========================================="
-          echo "VARIABILI CARTELLE"
+          echo "VARIABILI ATTIVE"
           echo "=========================================="
+          echo "PWD=$(pwd)"
           echo "PROJECT_DIR=$PROJECT_DIR"
           echo "OUTPUT_DIR=$OUTPUT_DIR"
           echo "OUTPUT_INTERACTIVE_DIR=$OUTPUT_INTERACTIVE_DIR"
@@ -110,40 +156,77 @@ jobs:
           echo "ECMWF_ANIMATIONS_DIR=$ECMWF_ANIMATIONS_DIR"
           echo "ECMWF_FORECAST_PNG_DIR=$ECMWF_FORECAST_PNG_DIR"
           echo "ECMWF_DATA_DIR=$ECMWF_DATA_DIR"
+          echo "LOCAL_DATA_DIR=$LOCAL_DATA_DIR"
+          echo "LOCAL_FORECAST_ROOT=$LOCAL_FORECAST_ROOT"
+          echo "FTP_HOST=$FTP_HOST"
+          echo "FTP_USER impostato? $([ -n "$FTP_USER" ] && echo SI || echo NO)"
+          echo "FTP_PASS impostato? $([ -n "$FTP_PASS" ] && echo SI || echo NO)"
           echo "=========================================="
 
-          echo "Creo nuovamente cartelle di sicurezza"
+          echo "Creo cartelle di sicurezza"
           mkdir -p "$OUTPUT_DIR"
           mkdir -p "$OUTPUT_INTERACTIVE_DIR"
           mkdir -p "$ECMWF_DIR"
           mkdir -p "$ECMWF_ANIMATIONS_DIR"
           mkdir -p "$ECMWF_FORECAST_PNG_DIR"
           mkdir -p "$ECMWF_DATA_DIR"
+          mkdir -p "$PROJECT_DIR/upload_state"
 
-          echo "1) Download ECMWF"
+          echo "=========================================="
+          echo "1) DOWNLOAD ECMWF"
+          echo "=========================================="
           python ecmwf_download.py
 
-          echo "2) Export JSON Italia"
+          echo "=========================================="
+          echo "2) EXPORT JSON ITALIA"
+          echo "=========================================="
           python export_meteo_json_italia.py
 
-          echo "3) Render immagini Italia"
+          echo "=========================================="
+          echo "3) RENDER IMMAGINI ITALIA"
+          echo "=========================================="
           python render_italia_smooth_complete_fixed_v23.py
 
-          echo "Sincronizzo file utili per upload"
+          echo "=========================================="
+          echo "SINCRONIZZO EVENTUALI FILE JSON"
+          echo "=========================================="
 
-          # Se vengono creati JSON dentro output/ecmwf, li copio anche in output/interactive
+          # Se gli script generano JSON in output/ecmwf, li copio anche in output/interactive.
           cp "$ECMWF_DIR"/*.json "$OUTPUT_INTERACTIVE_DIR"/ 2>/dev/null || true
           cp "$ECMWF_DIR"/*.json.gz "$OUTPUT_INTERACTIVE_DIR"/ 2>/dev/null || true
 
-          # Se vengono create animazioni WEBP, mantengo anche una copia in output/interactive/animations
-          mkdir -p "$OUTPUT_INTERACTIVE_DIR/animations"
-          cp "$ECMWF_ANIMATIONS_DIR"/*.webp "$OUTPUT_INTERACTIVE_DIR/animations"/ 2>/dev/null || true
+          # Se per qualche motivo vengono creati JSON in output/ecmwf/data, li copio anche in output/interactive.
+          cp "$ECMWF_DATA_DIR"/*.json "$OUTPUT_INTERACTIVE_DIR"/ 2>/dev/null || true
+          cp "$ECMWF_DATA_DIR"/*.json.gz "$OUTPUT_INTERACTIVE_DIR"/ 2>/dev/null || true
 
           echo "=========================================="
           echo "DEBUG FILE GENERATI"
           echo "=========================================="
-          find "$OUTPUT_DIR" -maxdepth 6 -type f | sort || true
+          find "$OUTPUT_DIR" -maxdepth 8 -type f | sort || true
           echo "=========================================="
 
-          echo "4) Upload output"
-          python ecmwf_upload.py
+          echo "=========================================="
+          echo "4) UPLOAD OUTPUT"
+          echo "=========================================="
+          python ecmwf_upload.py --all --reset-state
+
+      - name: Debug finale output
+        if: always()
+        shell: bash -l {0}
+        run: |
+          echo "=========================================="
+          echo "DEBUG FINALE"
+          echo "=========================================="
+
+          echo "Cartella corrente:"
+          pwd
+
+          echo "File output:"
+          find "$OUTPUT_DIR" -maxdepth 8 -type f | sort || true
+
+          echo "Log scheduler se presente:"
+          if [ -f "$PROJECT_DIR/scheduler_log.txt" ]; then
+            tail -n 120 "$PROJECT_DIR/scheduler_log.txt"
+          else
+            echo "scheduler_log.txt non presente"
+          fi
